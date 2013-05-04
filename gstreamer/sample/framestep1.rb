@@ -24,6 +24,10 @@
 
 require "gst"
 
+def gst_time(time)
+  Time.at(time / 1000000000.0).utc.strftime("%H:%M:%S.%N")
+end
+
 def event_loop(pipe)
   running = true
 
@@ -50,10 +54,11 @@ def event_loop(pipe)
       format, amount, rate, flush, intermediate, duration, eos =
         message.parse_step_done
       if format == Gst::Format::DEFAULT
-        puts "step done: #{duration} skipped in #{amount} frames"
+        puts "step done: #{gst_time(duration)} skipped in #{gst_time(amount)} frames"
       else
-        puts "step done: #{duration} skipped"
+        puts "step done: #{gst_time(duration)} skipped"
       end
+      running = false
     end
   end
 end
@@ -76,9 +81,8 @@ appsink.emit_signals = true
 appsink.sync = true
 appsink.signal_connect("new-preroll") do |appsink|
   # signalled when a new preroll buffer is available
-  # buffer = appsink.signal_emit_by_name("pull-preroll")
-  buffer = appsink.pull_preroll
-  puts "have new-preroll buffer #{buffer}, timestamp #{buffer}"
+  sample = appsink.pull_preroll
+  puts "have new-preroll sample #{sample}, timestamp #{gst_time(sample.buffer.pts)}"
   Gst::FlowReturn::OK
 end
 
@@ -91,15 +95,14 @@ videotestsrc >> appsink
 # go to the PAUSED state and wait for preroll
 puts "prerolling first frame"
 bin.pause
-#bin.get_state(Gst::CLOCK_TIME_NONE)
-state, pending = bin.get_state(Gst::SECOND * 3)
+state, pending = bin.get_state(Gst::CLOCK_TIME_NONE)
 puts "state: #{state.to_i}, pending: #{pending.to_i}"
-exit 1 if state != Gst::State::PAUSED
+#exit 1 if state != Gst::State::PAUSED
 
 # step two frames, flush so that new preroll is queued
-puts "stepping two frames"
-unless bin.send_event(Gst::Event.new_step(Gst::Format::BUFFERS, 2, 1.0, true, false))
-  puts "Failed to send STEP event!"
+puts "stepping three frames"
+unless bin.send_event(Gst::Event.new(Gst::Format::BUFFERS, 2, 1.0, true, false))
+  raise "Failed to send STEP event!"
 end
 
 # blocks and returns when we received the step done message
@@ -108,14 +111,14 @@ event_loop(bin)
 # wait for step to really complete
 bin.get_state(Gst::CLOCK_TIME_NONE)
 
-pos = bin.query_position(Gst::Format::TIME)
-puts "stepped two frames, now at #{pos}"
+result, pos = bin.query_position(Gst::Format::TIME)
+puts "stepped two frames, now at #{gst_time(pos)}"
 
 # step 3 frames, flush so that new preroll is queued
 puts "stepping 120 milliseconds"
-if bin.send_event(Gst::Event.new_step(Gst::Format::TIME, 120 * Gst::MSECOND, 1.0,
+unless bin.send_event(Gst::Event.new(Gst::Format::TIME, 120 * Gst::MSECOND, 1.0,
                                       true, false))
-  puts "Failed to send STEP event!"
+  raise "Failed to send STEP event!"
 end
 
 # blocks and returns when we received the step done message
@@ -124,8 +127,8 @@ event_loop(bin)
 # wait for step to really complete
 bin.get_state(Gst::CLOCK_TIME_NONE)
 
-pos = bin.query_position(Gst::Format::TIME)
-puts "stepped 120ms frames, now at #{pos}"
+result, pos = bin.query_position(Gst::Format::TIME)
+puts "stepped 120ms frames, now at #{gst_time(pos)}"
 
 puts "playing until EOS"
 bin.play
